@@ -363,6 +363,78 @@ textarea:focus-visible {
   border: 1px solid var(--aqua) !important;
 }
 
+.public-data-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 16px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--data-color) 42%, transparent);
+  border-radius: 16px;
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--data-color) 9%, transparent), transparent),
+    rgba(11, 15, 25, 0.58);
+  backdrop-filter: blur(14px);
+}
+
+.public-data-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.public-data-card span {
+  color: var(--data-color);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+}
+
+.public-data-card small,
+.public-data-card a {
+  color: rgba(224, 232, 238, 0.55);
+  font-size: 10px;
+}
+
+.public-data-card strong {
+  color: #f4f7f5;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.public-data-card strong em {
+  margin-left: 3px;
+  color: var(--data-color);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.public-data-card p {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  color: rgba(244, 247, 245, 0.82);
+  font-size: 12px;
+}
+
+.public-data-card a {
+  grid-column: 1 / -1;
+  width: max-content;
+  text-decoration: none;
+}
+
+.public-data-card a:hover {
+  color: var(--data-color);
+}
+
+.snapshot-note {
+  display: block;
+  max-width: 760px;
+  margin: 8px auto 0;
+  color: rgba(220, 228, 235, 0.48);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
 .topbar {
   position: fixed;
   z-index: 50;

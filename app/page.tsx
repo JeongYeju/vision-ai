@@ -1,30 +1,16 @@
 "use client";
 
 import { CSSProperties, PointerEvent, useCallback, useEffect, useRef, useState } from "react";
+import seongbukSnapshot from "@/data/seongbuk-scenario-snapshot.json";
+import {
+  createMockGazeAdapter,
+  createWebcamGazeAdapter,
+  type GazeAdapter,
+  type GazePoint,
+} from "@/lib/gaze-adapters";
 
 type Choice = "A" | "B";
 type CameraState = "idle" | "loading" | "calibrating" | "ready" | "error";
-
-type GazePoint = { x: number; y: number } | null;
-
-type WebGazerLike = {
-  begin: () => Promise<void>;
-  end: () => void;
-  pause: () => void;
-  resume: () => void;
-  setGazeListener: (listener: (data: GazePoint) => void) => WebGazerLike;
-  clearGazeListener: () => WebGazerLike;
-  showVideoPreview: (show: boolean) => WebGazerLike;
-  showPredictionPoints: (show: boolean) => WebGazerLike;
-  saveDataAcrossSessions: (save: boolean) => WebGazerLike;
-  recordScreenPosition?: (x: number, y: number, eventType: string) => void;
-};
-
-declare global {
-  interface Window {
-    webgazer?: WebGazerLike;
-  }
-}
 
 const CALIBRATION_POINTS = [
   { x: 12, y: 18 },
@@ -257,11 +243,12 @@ export default function Home() {
   const [calibrationIndex, setCalibrationIndex] = useState(0);
   const cursorRef = useRef<HTMLDivElement>(null);
   const cameraCursorRef = useRef<HTMLDivElement>(null);
-  const webgazerRef = useRef<WebGazerLike | null>(null);
+  const gazeAdapterRef = useRef<GazeAdapter | null>(null);
   const gazeTargetRef = useRef<HTMLElement | null>(null);
   const smoothGazeRef = useRef<GazePoint>(null);
 
   const role = ROLES[activeRole];
+  const roleIndicator = seongbukSnapshot.indicators[activeRole];
   const discoveryComplete = ROLES.every((item) => discovered[item.id] !== undefined);
   const voteComplete = ROLES.every((item) => votes[item.id]);
   const choiceCounts = {
@@ -339,30 +326,6 @@ export default function Home() {
     }
   }, [leaveGazeTarget]);
 
-  const loadWebGazer = async () => {
-    if (window.webgazer) return window.webgazer;
-    await new Promise<void>((resolve, reject) => {
-      const existing = document.querySelector<HTMLScriptElement>("script[data-webgazer]");
-      if (existing) {
-        existing.addEventListener("load", () => resolve(), { once: true });
-        existing.addEventListener("error", () => reject(new Error("load")), { once: true });
-        return;
-      }
-      const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/webgazer@3.5.3/dist/webgazer.min.js";
-      script.async = true;
-      script.dataset.webgazer = "true";
-      script.onload = () => resolve();
-      script.onerror = () => {
-        script.remove();
-        reject(new Error("load"));
-      };
-      document.head.appendChild(script);
-    });
-    if (!window.webgazer) throw new Error("load");
-    return window.webgazer;
-  };
-
   const enableCameraGaze = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraState("error");
@@ -373,20 +336,10 @@ export default function Home() {
     setCameraState("loading");
     setCameraMessage("카메라 연결 중…");
     try {
-      const permissionStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      });
-      permissionStream.getTracks().forEach((track) => track.stop());
-
-      const webgazer = await loadWebGazer();
-      webgazerRef.current = webgazer;
-      webgazer
-        .saveDataAcrossSessions(false)
-        .showVideoPreview(true)
-        .showPredictionPoints(false)
-        .setGazeListener(handleGaze);
-      await webgazer.begin();
+      gazeAdapterRef.current?.stop();
+      const adapter = createWebcamGazeAdapter();
+      gazeAdapterRef.current = adapter;
+      await adapter.start(handleGaze);
       setCalibrationIndex(0);
       setCameraState("calibrating");
       setCameraMessage("점마다 시선을 고정한 뒤 클릭하세요.");
@@ -408,7 +361,10 @@ export default function Home() {
                 ? "시선 추적 모듈을 불러오지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요."
                 : `카메라 초기화에 실패했습니다 (${errorName}). Chrome 또는 Safari에서 다시 시도해 주세요.`;
       setCameraState("error");
-      setCameraMessage(message);
+      const mockAdapter = createMockGazeAdapter();
+      gazeAdapterRef.current = mockAdapter;
+      await mockAdapter.start(handleGaze);
+      setCameraMessage(`${message} 마우스 시선 모드로 자동 전환했습니다.`);
     }
   };
 
@@ -417,12 +373,11 @@ export default function Home() {
     smoothGazeRef.current = null;
     if (cameraCursorRef.current) cameraCursorRef.current.dataset.visible = "false";
     try {
-      webgazerRef.current?.clearGazeListener();
-      webgazerRef.current?.end();
+      gazeAdapterRef.current?.stop();
     } catch {
       // Camera shutdown should never block the original mouse/click experience.
     }
-    webgazerRef.current = null;
+    gazeAdapterRef.current = null;
     setCameraState("idle");
     setCameraMessage("");
     setCalibrationIndex(0);
@@ -431,7 +386,7 @@ export default function Home() {
   const calibratePoint = (point: { x: number; y: number }) => {
     const x = (window.innerWidth * point.x) / 100;
     const y = (window.innerHeight * point.y) / 100;
-    webgazerRef.current?.recordScreenPosition?.(x, y, "click");
+    gazeAdapterRef.current?.calibrate(x, y);
     if (calibrationIndex >= CALIBRATION_POINTS.length - 1) {
       setCameraState("ready");
       setCameraMessage("웹캠 시선 추적 중");
@@ -442,7 +397,7 @@ export default function Home() {
 
   useEffect(() => () => {
     try {
-      webgazerRef.current?.end();
+      gazeAdapterRef.current?.stop();
     } catch {
       // Ignore browser camera cleanup errors during unmount.
     }
@@ -718,6 +673,18 @@ export default function Home() {
               한 지점을 1.5초 바라보면 단서가 열립니다.
             </p>
 
+            <div className="public-data-card" style={{ "--data-color": role.color } as CSSProperties}>
+              <div>
+                <span>SEOUL OPEN DATA · SNAPSHOT</span>
+                <small>{roleIndicator.basis}</small>
+              </div>
+              <strong>{roleIndicator.value}<em>{roleIndicator.unit}</em></strong>
+              <p>{roleIndicator.label} · {roleIndicator.signal}</p>
+              <a href={seongbukSnapshot.source.url} target="_blank" rel="noreferrer">
+                {seongbukSnapshot.source.name} ↗
+              </a>
+            </div>
+
             <div className={`discovery-message ${discovered[role.id] !== undefined ? "visible" : ""}`}>
               <span style={{ background: role.color }} />
               <div>
@@ -762,6 +729,7 @@ export default function Home() {
             <p className="eyebrow"><span /> VISUAL BALANCE GAME</p>
             <h2>이 골목에는 어떤 미래가 더 필요할까요?</h2>
             <p>넓은 그늘을 만들면 시원해지지만, 배송 통로가 좁아집니다.</p>
+            <small className="snapshot-note">{seongbukSnapshot.disclaimer}</small>
           </div>
 
           <div className="future-split">
