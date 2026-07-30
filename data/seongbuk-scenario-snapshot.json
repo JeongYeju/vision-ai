@@ -1,0 +1,36 @@
+{
+  "location": "성북구 경사 골목",
+  "capturedAt": "전시 시나리오 기준",
+  "mode": "snapshot",
+  "disclaimer": "서울 공공데이터 항목을 바탕으로 구성한 프로토타입 수치이며 실시간 실측값이 아닙니다.",
+  "source": {
+    "name": "서울 열린데이터광장 · 서울 실시간 도시데이터",
+    "url": "https://data.seoul.go.kr/SeoulRtd/"
+  },
+  "indicators": [
+    {
+      "roleId": 0,
+      "label": "한낮 노면 체감",
+      "value": "42.6",
+      "unit": "°C",
+      "signal": "열 스트레스 높음",
+      "basis": "날씨·기온 데이터 범주"
+    },
+    {
+      "roleId": 1,
+      "label": "유효 통행 폭",
+      "value": "1.6",
+      "unit": "m",
+      "signal": "교행 여유 부족",
+      "basis": "도로·보행 시나리오"
+    },
+    {
+      "roleId": 2,
+      "label": "강우 뒤 물 고임",
+      "value": "높음",
+      "unit": "",
+      "signal": "배수·해충 위험",
+      "basis": "날씨·강수 데이터 범주"
+    }
+  ]
+}
