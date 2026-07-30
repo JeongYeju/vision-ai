@@ -1,8 +1,38 @@
 "use client";
 
-import { CSSProperties, PointerEvent, useEffect, useRef, useState } from "react";
+import { CSSProperties, PointerEvent, useCallback, useEffect, useRef, useState } from "react";
 
 type Choice = "A" | "B";
+type CameraState = "idle" | "loading" | "calibrating" | "ready" | "error";
+
+type GazePoint = { x: number; y: number } | null;
+
+type WebGazerLike = {
+  begin: () => Promise<void>;
+  end: () => void;
+  pause: () => void;
+  resume: () => void;
+  setGazeListener: (listener: (data: GazePoint) => void) => WebGazerLike;
+  clearGazeListener: () => WebGazerLike;
+  showVideoPreview: (show: boolean) => WebGazerLike;
+  showPredictionPoints: (show: boolean) => WebGazerLike;
+  saveDataAcrossSessions: (save: boolean) => WebGazerLike;
+  recordScreenPosition?: (x: number, y: number, eventType: string) => void;
+};
+
+declare global {
+  interface Window {
+    webgazer?: WebGazerLike;
+  }
+}
+
+const CALIBRATION_POINTS = [
+  { x: 12, y: 18 },
+  { x: 88, y: 18 },
+  { x: 50, y: 50 },
+  { x: 12, y: 82 },
+  { x: 88, y: 82 },
+];
 
 type Role = {
   id: number;
@@ -98,6 +128,7 @@ function DwellTarget({
   style?: CSSProperties;
 }) {
   const [progress, setProgress] = useState(0);
+  const targetRef = useRef<HTMLButtonElement>(null);
   const frame = useRef<number | null>(null);
   const started = useRef(0);
   const finished = useRef(false);
@@ -121,7 +152,7 @@ function DwellTarget({
   };
 
   const start = () => {
-    if (disabled || finished.current) return;
+    if (disabled || finished.current || frame.current) return;
     started.current = performance.now();
     const tick = (time: number) => {
       const value = Math.min(100, ((time - started.current) / 1500) * 100);
@@ -135,10 +166,28 @@ function DwellTarget({
     frame.current = requestAnimationFrame(tick);
   };
 
-  useEffect(() => () => stop(), []);
+  const startHandlerRef = useRef(start);
+  const stopHandlerRef = useRef(stop);
+  startHandlerRef.current = start;
+  stopHandlerRef.current = stop;
+
+  useEffect(() => {
+    const target = targetRef.current;
+    if (!target) return;
+    const gazeEnter = () => startHandlerRef.current();
+    const gazeLeave = () => stopHandlerRef.current();
+    target.addEventListener("webgaze-enter", gazeEnter);
+    target.addEventListener("webgaze-leave", gazeLeave);
+    return () => {
+      target.removeEventListener("webgaze-enter", gazeEnter);
+      target.removeEventListener("webgaze-leave", gazeLeave);
+      stopHandlerRef.current();
+    };
+  }, []);
 
   return (
     <button
+      ref={targetRef}
       type="button"
       aria-label={`${label}, 1.5초 시선 체류 또는 클릭`}
       className={`dwell-target ${className}`}
@@ -148,6 +197,7 @@ function DwellTarget({
       onFocus={start}
       onBlur={stop}
       onClick={complete}
+      data-gaze-target="true"
       style={{ ...style, "--dwell": `${progress * 3.6}deg` } as CSSProperties}
     >
       {children}
@@ -202,7 +252,14 @@ export default function Home() {
   const [growthTick, setGrowthTick] = useState(0);
   const [growthReady, setGrowthReady] = useState(false);
   const [resultRole, setResultRole] = useState<number | null>(null);
+  const [cameraState, setCameraState] = useState<CameraState>("idle");
+  const [cameraMessage, setCameraMessage] = useState("");
+  const [calibrationIndex, setCalibrationIndex] = useState(0);
   const cursorRef = useRef<HTMLDivElement>(null);
+  const cameraCursorRef = useRef<HTMLDivElement>(null);
+  const webgazerRef = useRef<WebGazerLike | null>(null);
+  const gazeTargetRef = useRef<HTMLElement | null>(null);
+  const smoothGazeRef = useRef<GazePoint>(null);
 
   const role = ROLES[activeRole];
   const discoveryComplete = ROLES.every((item) => discovered[item.id] !== undefined);
@@ -245,6 +302,139 @@ export default function Home() {
     setGrowthReady(false);
     setResultRole(null);
   };
+
+  const leaveGazeTarget = useCallback(() => {
+    if (gazeTargetRef.current) {
+      gazeTargetRef.current.dispatchEvent(new Event("webgaze-leave"));
+      gazeTargetRef.current = null;
+    }
+  }, []);
+
+  const handleGaze = useCallback((data: GazePoint) => {
+    if (!data || !Number.isFinite(data.x) || !Number.isFinite(data.y)) {
+      leaveGazeTarget();
+      return;
+    }
+
+    const previous = smoothGazeRef.current;
+    const point = previous
+      ? { x: previous.x * 0.72 + data.x * 0.28, y: previous.y * 0.72 + data.y * 0.28 }
+      : data;
+    smoothGazeRef.current = point;
+
+    if (cameraCursorRef.current) {
+      cameraCursorRef.current.style.transform = `translate3d(${point.x}px, ${point.y}px, 0)`;
+      cameraCursorRef.current.dataset.visible = "true";
+    }
+
+    const hit = document
+      .elementFromPoint(point.x, point.y)
+      ?.closest<HTMLElement>("[data-gaze-target='true']:not(:disabled)") ?? null;
+
+    if (hit === gazeTargetRef.current) return;
+    leaveGazeTarget();
+    if (hit) {
+      gazeTargetRef.current = hit;
+      hit.dispatchEvent(new Event("webgaze-enter"));
+    }
+  }, [leaveGazeTarget]);
+
+  const loadWebGazer = async () => {
+    if (window.webgazer) return window.webgazer;
+    await new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>("script[data-webgazer]");
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("load")), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://webgazer.cs.brown.edu/webgazer.js";
+      script.async = true;
+      script.dataset.webgazer = "true";
+      script.onload = () => resolve();
+      script.onerror = () => {
+        script.remove();
+        reject(new Error("load"));
+      };
+      document.head.appendChild(script);
+    });
+    if (!window.webgazer) throw new Error("load");
+    return window.webgazer;
+  };
+
+  const enableCameraGaze = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraState("error");
+      setCameraMessage("이 브라우저에서는 카메라 시선 추적을 사용할 수 없습니다.");
+      return;
+    }
+
+    setCameraState("loading");
+    setCameraMessage("카메라 연결 중…");
+    try {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+
+      const webgazer = await loadWebGazer();
+      webgazerRef.current = webgazer;
+      webgazer
+        .saveDataAcrossSessions(false)
+        .showVideoPreview(true)
+        .showPredictionPoints(false)
+        .setGazeListener(handleGaze);
+      await webgazer.begin();
+      setCalibrationIndex(0);
+      setCameraState("calibrating");
+      setCameraMessage("점마다 시선을 고정한 뒤 클릭하세요.");
+    } catch (error) {
+      setCameraState("error");
+      setCameraMessage(
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "카메라 권한이 차단됐습니다. 주소창의 카메라 아이콘에서 허용해 주세요."
+          : "카메라를 시작하지 못했습니다. 마우스 시선과 클릭은 계속 사용할 수 있습니다.",
+      );
+    }
+  };
+
+  const disableCameraGaze = useCallback(() => {
+    leaveGazeTarget();
+    smoothGazeRef.current = null;
+    if (cameraCursorRef.current) cameraCursorRef.current.dataset.visible = "false";
+    try {
+      webgazerRef.current?.clearGazeListener();
+      webgazerRef.current?.end();
+    } catch {
+      // Camera shutdown should never block the original mouse/click experience.
+    }
+    webgazerRef.current = null;
+    setCameraState("idle");
+    setCameraMessage("");
+    setCalibrationIndex(0);
+  }, [leaveGazeTarget]);
+
+  const calibratePoint = (point: { x: number; y: number }) => {
+    const x = (window.innerWidth * point.x) / 100;
+    const y = (window.innerHeight * point.y) / 100;
+    webgazerRef.current?.recordScreenPosition?.(x, y, "click");
+    if (calibrationIndex >= CALIBRATION_POINTS.length - 1) {
+      setCameraState("ready");
+      setCameraMessage("웹캠 시선 추적 중");
+      return;
+    }
+    setCalibrationIndex((value) => value + 1);
+  };
+
+  useEffect(() => () => {
+    try {
+      webgazerRef.current?.end();
+    } catch {
+      // Ignore browser camera cleanup errors during unmount.
+    }
+  }, []);
 
   const discoverClue = (roleId: number, clueIndex: number) => {
     setDiscovered((prev) => ({ ...prev, [roleId]: clueIndex }));
@@ -328,6 +518,55 @@ export default function Home() {
       <div className="gaze-cursor" ref={cursorRef} aria-hidden="true">
         <span />
       </div>
+      <div
+        className={`camera-gaze-cursor ${cameraState === "ready" ? "ready" : ""}`}
+        ref={cameraCursorRef}
+        aria-hidden="true"
+      >
+        <span />
+      </div>
+
+      {cameraState !== "idle" && cameraState !== "calibrating" && (
+        <div className={`camera-status camera-${cameraState}`} role="status">
+          <span className="camera-live-dot" />
+          <div>
+            <b>{cameraState === "ready" ? "웹캠 시선 추적" : cameraState === "loading" ? "카메라 준비 중" : "카메라 연결 실패"}</b>
+            <small>{cameraMessage}</small>
+          </div>
+          {cameraState === "error" ? (
+            <button type="button" onClick={enableCameraGaze}>다시 시도</button>
+          ) : cameraState === "ready" ? (
+            <button type="button" onClick={disableCameraGaze}>끄기</button>
+          ) : null}
+        </div>
+      )}
+
+      {cameraState === "calibrating" && (
+        <section className="calibration-layer" aria-label="웹캠 시선 보정">
+          <div className="calibration-copy">
+            <p className="eyebrow"><span /> CAMERA GAZE CALIBRATION</p>
+            <h2>빛나는 점을 바라보고 클릭하세요.</h2>
+            <p>얼굴을 화면 정면에 두고, 머리는 가능한 한 움직이지 마세요.</p>
+            <small>{calibrationIndex + 1} / {CALIBRATION_POINTS.length}</small>
+          </div>
+          {CALIBRATION_POINTS.map((point, index) => (
+            <button
+              type="button"
+              key={`${point.x}-${point.y}`}
+              className={`calibration-point ${index === calibrationIndex ? "active" : ""} ${index < calibrationIndex ? "done" : ""}`}
+              style={{ left: `${point.x}%`, top: `${point.y}%` }}
+              disabled={index !== calibrationIndex}
+              onClick={() => calibratePoint(point)}
+              aria-label={`시선 보정 지점 ${index + 1}`}
+            >
+              <span />
+            </button>
+          ))}
+          <button className="calibration-cancel" type="button" onClick={disableCameraGaze}>
+            카메라 없이 계속
+          </button>
+        </section>
+      )}
 
       {stage > 0 && (
         <header className="topbar">
@@ -385,6 +624,19 @@ export default function Home() {
               <span className="mouse-mark">◎</span>
               마우스를 시선처럼 움직이세요 · 클릭으로도 선택할 수 있어요
             </div>
+            <button
+              type="button"
+              className="camera-enable"
+              onClick={enableCameraGaze}
+              disabled={cameraState === "loading" || cameraState === "ready"}
+            >
+              <span className="camera-icon">◉</span>
+              <span>
+                <b>{cameraState === "ready" ? "웹캠 시선 추적 사용 중" : "웹캠 시선 추적 켜기"}</b>
+                <small>카메라 허용 후 5개 지점 보정 · 영상은 기기에만 머뭅니다</small>
+              </span>
+              <i>실험 모드</i>
+            </button>
           </div>
           <div className="intro-specimen">
             <span>SPECIMEN</span>
