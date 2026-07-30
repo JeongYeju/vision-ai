@@ -6,13 +6,12 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "test": "node --test tests/source.test.mjs",
-    "lint": "eslint . --ignore-pattern .next"
-  },
+ "scripts": {
+  "dev": "next dev",
+  "build": "next build",
+  "start": "next start",
+  "lint": "eslint . --ignore-pattern out --ignore-pattern .next"
+},
   "dependencies": {
     "next": "16.2.6",
     "react": "19.2.6",
