@@ -349,7 +349,7 @@ export default function Home() {
         return;
       }
       const script = document.createElement("script");
-      script.src = "https://webgazer.cs.brown.edu/webgazer.js";
+      script.src = "https://cdn.jsdelivr.net/npm/webgazer@3.5.3/dist/webgazer.min.js";
       script.async = true;
       script.dataset.webgazer = "true";
       script.onload = () => resolve();
@@ -391,12 +391,24 @@ export default function Home() {
       setCameraState("calibrating");
       setCameraMessage("점마다 시선을 고정한 뒤 클릭하세요.");
     } catch (error) {
-      setCameraState("error");
-      setCameraMessage(
-        error instanceof DOMException && error.name === "NotAllowedError"
+      const errorName =
+        error instanceof DOMException
+          ? error.name
+          : error instanceof Error
+            ? error.message
+            : "unknown";
+      const message =
+        errorName === "NotAllowedError" || errorName === "SecurityError"
           ? "카메라 권한이 차단됐습니다. 주소창의 카메라 아이콘에서 허용해 주세요."
-          : "카메라를 시작하지 못했습니다. 마우스 시선과 클릭은 계속 사용할 수 있습니다.",
-      );
+          : errorName === "NotFoundError" || errorName === "DevicesNotFoundError"
+            ? "사용 가능한 카메라를 찾지 못했습니다."
+            : errorName === "NotReadableError" || errorName === "TrackStartError"
+              ? "카메라를 다른 앱이 사용 중이거나 이 내장 브라우저에서 접근할 수 없습니다. Chrome 또는 Safari에서 열어주세요."
+              : errorName === "load"
+                ? "시선 추적 모듈을 불러오지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요."
+                : `카메라 초기화에 실패했습니다 (${errorName}). Chrome 또는 Safari에서 다시 시도해 주세요.`;
+      setCameraState("error");
+      setCameraMessage(message);
     }
   };
 
